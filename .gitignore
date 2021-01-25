@@ -17,3 +17,5 @@
 .idea/*.*
 socket-io-msg-platform
 socket-io-msg-platform.exe
+./client/client
+./client/client.exe
