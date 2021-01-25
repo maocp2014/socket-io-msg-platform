@@ -13,3 +13,7 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+.idea
+.idea/*.*
+socket-io-msg-platform
+socket-io-msg-platform.exe
