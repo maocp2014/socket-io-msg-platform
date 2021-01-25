@@ -3,7 +3,6 @@ package server
 import (
 	"github.com/googollee/go-socket.io"
 	"log"
-	"strconv"
 	"sync"
 )
 
@@ -29,6 +28,8 @@ func RegisterEnvet(){
 	server := GetWsServer()
 	server.OnConnect("/", func(conn socketio.Conn) error {
 		log.Println(conn.ID()+" "+conn.RemoteAddr().String()+" connect ")
+		conn.Join("room")
+		GetMsgManager().JoinRoom("room",conn)
 		return nil
 	})
 
@@ -59,8 +60,8 @@ func RegisterEnvet(){
 	})
 
 	//确认消息事件
-	server.OnEvent("/", "confirmMessage", func(conn socketio.Conn,msgId uint64){
-		log.Println(conn.ID()+" "+conn.RemoteAddr().String()+" confirmMessage "+strconv.FormatUint(msgId,10))
+	server.OnEvent("/", "confirmMessage", func(conn socketio.Conn,msgId string){
+		log.Println(conn.ID()+" "+conn.RemoteAddr().String()+" confirmMessage "+msgId)
 		GetMsgManager().ConfirmMsg(conn,msgId)
 	})
 	

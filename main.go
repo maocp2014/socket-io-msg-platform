@@ -47,7 +47,18 @@ func main() {
 	go wsServer.Serve()
 	defer wsServer.Close()
 
-	http.Handle("/socket.io/", wsServer)
+	http.HandleFunc("/socket.io/", func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != ""{
+			w.Header().Set("Access-Control-Allow-Origin",origin)
+		}else{
+			w.Header().Set("Access-Control-Allow-Origin","*")
+		}
+		w.Header().Set("Access-Control-Allow-Credentials","true")
+		//删除Origin以避开websocket的域名校验
+		r.Header.Del("Origin")
+		wsServer.ServeHTTP(w,r)
+	})
 	http.HandleFunc("/postMsg",receivePost)
 	log.Println("Serving at localhost"+listenAddr)
 	log.Fatal(http.ListenAndServe(listenAddr, nil))

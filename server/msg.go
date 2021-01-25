@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-var msgId uint64
+var msgId uint32
 
 type PostMsg struct {
-	Id uint64					`json:"msgId"`			//消息id，用于ws客户端和服务器确认收到该消息
+	Id string					`json:"msgId"`			//消息id，用于ws客户端和服务器确认收到该消息
 	Room string					`json:"room"`			//房间号
 	PostData interface{}		`json:"postData"`		//接口收到的数据，原样转发给ws客户端
 	IsEnsure bool				`json:"isEnsure"`		//是否需要保证成功送达
@@ -32,14 +32,14 @@ type RoomConnChange struct {
 }
 //用于客户端返回确认接收消息后同步数据
 type MsgConfirm struct {
-	MsgId uint64
+	MsgId string
 	Conn socketio.Conn
 }
 
-//产生全局唯一的消息id，溢出则从0再次来过
-func getMsgId() uint64{
-	msgId := atomic.AddUint64(&msgId,1)
-	return msgId
+//产生全局唯一的消息id，考虑到服务可能会重启，所以需要加入时间因子
+func getMsgId() string{
+	msgId := atomic.AddUint32(&msgId,1)
+	return strconv.FormatInt(time.Now().Unix(),10)+":"+strconv.FormatUint(uint64(msgId),10)
 }
 
 func newPostMsg(room string,postData string,isEnsure string)*PostMsg{
@@ -72,7 +72,7 @@ func GetMsgManager() *MsgManager{
 			LeavaRoomChan:      make(chan *RoomConnChange,256),
 			LeaveAllRoomChan:	make(chan socketio.Conn,100),
 			MsgConnConfirmChan: make(chan *MsgConfirm,256),
-			EnsureMsgSendMap:   make(map[uint64]*EnsureMsgSendInfo),
+			EnsureMsgSendMap:   make(map[string]*EnsureMsgSendInfo),
 			roomConns:          make(map[string]map[string]socketio.Conn),
 			roomConnLock:       sync.RWMutex{},
 			msgSendLock:        sync.RWMutex{},
@@ -88,7 +88,7 @@ type MsgManager struct {
 	LeavaRoomChan      chan *RoomConnChange                //进入房间的通信通道
 	LeaveAllRoomChan   chan socketio.Conn				   //用于客户端异常断开等情况退出所有房间
 	MsgConnConfirmChan chan *MsgConfirm                    //客户端消息确认同步通道
-	EnsureMsgSendMap   map[uint64]*EnsureMsgSendInfo       //存放消息的id和客户端id的映射,以及该发送给该客户端发送消息的时间
+	EnsureMsgSendMap   map[string]*EnsureMsgSendInfo       //存放消息的id和客户端id的映射,以及该发送给该客户端发送消息的时间
 	roomConns          map[string]map[string]socketio.Conn //第一个key是房间号，第二个key是链接id
 	roomConnLock       sync.RWMutex                        //控制房间和链接的读写锁
 	msgSendLock        sync.RWMutex                        //用于控制确认送达消息读写的锁
@@ -201,7 +201,7 @@ func (s *MsgManager) ensureMsg(){
 	go func() {//同步确认接收情况
 		for{
 			mcc := <- s.MsgConnConfirmChan
-			log.Println(mcc.Conn.ID() + " confirm msg "+strconv.FormatUint(mcc.MsgId,10))
+			log.Println(mcc.Conn.ID() + " confirm msg "+mcc.MsgId)
 			s.msgSendLock.Lock()
 			if mmap,ok := s.EnsureMsgSendMap[mcc.MsgId];ok{
 				mmap.Lock()
@@ -265,7 +265,7 @@ func (s *MsgManager)LeaveAllRoom(conn socketio.Conn){
 	s.LeaveAllRoomChan <- conn
 }
 
-func (s *MsgManager)ConfirmMsg(conn socketio.Conn,msgId uint64){
+func (s *MsgManager)ConfirmMsg(conn socketio.Conn,msgId string){
 	msgConf := MsgConfirm{
 		msgId,
 		conn,
