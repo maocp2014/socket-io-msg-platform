@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"github.com/googollee/go-socket.io"
 	"log"
 	"strconv"
@@ -47,12 +48,7 @@ func newPostMsg(room string,postData string,isEnsure string)*PostMsg{
 		Room:room,
 		PostData:postData,
 	}
-	if isEnsure == "1"{
-		msg.IsEnsure = true
-	}else{
-		msg.IsEnsure = false
-	}
-
+	msg.IsEnsure = isEnsure == "1"
 	return msg
 }
 
@@ -78,6 +74,35 @@ func GetMsgManager() *MsgManager{
 type MsgRoom struct {
 	Name string
 	ConnsMap sync.Map		//健名为conn.id,键值为conn
+	num int32
+}
+
+func (mr *MsgRoom) joinRoom(conn socketio.Conn){
+ 	if mr.HasConn(conn){
+		return
+	}
+	mr.ConnsMap.Store(conn.ID(),conn)
+	atomic.AddInt32(&mr.num,1)
+	log.Println(fmt.Sprintf("after join room %s has client num %d",mr.Name,mr.num))
+}
+
+func (mr *MsgRoom) LeaveRoom(conn socketio.Conn){
+	if !mr.HasConn(conn){
+		return
+	}
+	_,ok := mr.ConnsMap.Load(conn.ID())
+	//连接在房间内则删除，否则忽略
+	if ok {
+		mr.ConnsMap.Delete(conn.ID())
+		atomic.AddInt32(&mr.num,-1)
+	}
+	log.Println(fmt.Sprintf("after leave room %s has client num %d",mr.Name,mr.num))
+}
+
+func (mr *MsgRoom) HasConn(conn socketio.Conn) bool{
+	_,ok := mr.ConnsMap.Load(conn.ID())
+	//已经在房间内则直接忽略
+	return ok
 }
 
 type MsgManager struct {
@@ -86,6 +111,7 @@ type MsgManager struct {
 	LeavaRoomChan    chan *ConnRoomChangeInfo //进入房间的通信通道
 	LeaveAllRoomChan chan socketio.Conn       //用于客户端异常断开等情况退出所有房间
 	rooms            sync.Map                 //第一个key是房间号，值为msgRoom结构
+	totolConns int32	 					  //总连接数
 }
 
 func (s *MsgManager) Run(){
@@ -107,32 +133,30 @@ func (s *MsgManager) loopRoomConns(){
 }
 //客户端加入房间
 func (s *MsgManager) doJoinRoom(join *ConnRoomChangeInfo){
-	log.Println(join.Conn.ID()+" join room "+ join.Room)
 	msgRoom,ok := s.rooms.Load(join.Room)
 	if ok {
-		msgRoom.(*MsgRoom).ConnsMap.Store(join.Conn.ID(), join.Conn)
+		msgRoom.(*MsgRoom).joinRoom(join.Conn)
 	}else{
 		newMsgRoom := MsgRoom{
 			Name:     join.Room,
 			ConnsMap: sync.Map{},
 		}
-		newMsgRoom.ConnsMap.Store(join.Conn.ID(), join.Conn)
+		newMsgRoom.joinRoom(join.Conn)
 		s.rooms.Store(join.Room,&newMsgRoom)
 	}
 }
 //客户端离开房间
 func (s *MsgManager) doLeaveRoom(leave *ConnRoomChangeInfo){
-	log.Println(leave.Conn.ID()+" leave room "+leave.Room)
 	msgRoom,ok := s.rooms.Load(leave.Room)
 	if ok {
-		msgRoom.(*MsgRoom).ConnsMap.Delete(leave.Conn.ID())
+		msgRoom.(*MsgRoom).LeaveRoom(leave.Conn)
 	}
 }
 //客户端离开所有房间
 func (s *MsgManager) doLeaveAllRoom(conn socketio.Conn){
 	log.Println(conn.ID()+" leave all room ")
 	s.rooms.Range(func(k,v interface{}) bool{
-		v.(*MsgRoom).ConnsMap.Delete(conn.ID())
+		v.(*MsgRoom).LeaveRoom(conn)
 		return true
 	})
 }
@@ -142,12 +166,8 @@ func (s *MsgManager) doLeaveAllRoom(conn socketio.Conn){
 func (s *MsgManager) RoomHasConn(room string, conn socketio.Conn) bool{
 	msgRoom,ok := s.rooms.Load(room)
 	if ok {
-		_,ok = msgRoom.(*MsgRoom).ConnsMap.Load(conn.ID())
-		if ok {
-			return true
-		}
+		return msgRoom.(*MsgRoom).HasConn(conn)
 	}
-
 	return false
 }
 

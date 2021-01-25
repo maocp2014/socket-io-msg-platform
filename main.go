@@ -20,8 +20,9 @@ type WebResult struct {
 var listenAddr string
 
 func init(){
-	runtime.GOMAXPROCS(runtime.NumCPU() / 2)
+	runtime.GOMAXPROCS(runtime.NumCPU())
 	flag.StringVar(&listenAddr, "listen", ":8099", "--listen")
+	flag.Parse()
 }
 
 func receivePost(w http.ResponseWriter,r *http.Request){
@@ -42,7 +43,7 @@ func receivePost(w http.ResponseWriter,r *http.Request){
 }
 
 func main() {
-	wsServer := server.GetWsServer()
+	wsServer := server.NewWsServer()
 	server.GetMsgManager().Run()
 	go wsServer.Serve()
 	defer wsServer.Close()
