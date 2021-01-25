@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/googollee/go-socket.io"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -17,6 +18,7 @@ type MsgWorker struct {
 
 //即来即走，完成工作报备
 func (w *MsgWorker)work(){
+	log.Println("msg worker "+strconv.Itoa(w.id)+" start work")
 	for {
 		//每次空闲时，woker将自己接受消息的通道注册到工作池
 		w.msgChanPool <- w.msgChan
@@ -41,12 +43,36 @@ type ConfirmMsgWorker struct {
 
 //即来即走，完成工作报备
 func (w *ConfirmMsgWorker)work(){
+	log.Println("confirm msg worker "+strconv.Itoa(w.id)+" start work")
 	for {
 		//每次空闲时，woker将自己接受消息的通道注册到工作池
 		w.ConfirmMsgChanPool <- w.confirmMsgChan
 		select {
 			case msg := <- w.confirmMsgChan:
 				w.disPatcher.doConfirmMsg(msg)
+		}
+	}
+}
+
+//接收客户端消息回执的worker
+type ReSendMsgWorker struct {
+	id                 int
+	ReSendMsgChan      chan []string						//用于接收ws客户端发送的确认消息回执
+	ReSendChanPool 	   chan chan []string
+	disPatcher         *MsgDispatcher
+}
+
+//即来即走，完成工作报备
+func (w *ReSendMsgWorker)work(){
+	log.Println("resend msg worker "+strconv.Itoa(w.id)+" start work")
+	for {
+		//每次空闲时，woker将自己接受消息的通道注册到工作池
+		w.ReSendChanPool <- w.ReSendMsgChan
+		select {
+			case msgIdArr := <- w.ReSendMsgChan:
+				for _,msgId := range msgIdArr{
+					w.disPatcher.reSendEnsureMsg(msgId)
+				}
 		}
 	}
 }
@@ -60,8 +86,14 @@ type MsgDispatcher struct {
 	ConfirmMsgChanPool chan chan *ConfirmMsg
 	confirmWorkers []*ConfirmMsgWorker
 
+	reSendMsgChan     chan []string              //客户端消息确认同步通道
+	reSendMsgChanPool chan chan []string
+	reSendWorkers     []*ReSendMsgWorker
+
 	EnsureMsgSendMap map[string]*EnsureMsgSendInfo //存放消息的id和客户端id的映射,以及该发送给该客户端发送消息的时间
 	msgSendLock      sync.RWMutex                  //用于控制确认送达消息读写的锁
+	popEnsureMsgChan chan []string					//从延时队列取待确认消息的msgId数组
+	ringQueue *RingQueue
 }
 
 func (p *MsgDispatcher)run(){
@@ -74,9 +106,15 @@ func (p *MsgDispatcher)run(){
 		go confirmWorker.work()
 	}
 
+	//启动resend confirm worker
+	for _,worker := range p.reSendWorkers{
+		go worker.work()
+	}
+
 	//启动wokerPool
 	go p.loopMsg()
 	go p.ensureMsg()
+	go p.ringQueue.Run()
 }
 //接收外部传进来的消息
 func (p *MsgDispatcher)dispatchMsg(msg *PostMsg){
@@ -88,6 +126,7 @@ func (p *MsgDispatcher)confirmMsg(msg *ConfirmMsg){
 }
 
 func (p *MsgDispatcher)loopMsg(){
+	log.Println("loopMsg start ")
 	for{
 		select {
 			//从消息通道里取消息分给准备好的woker
@@ -129,16 +168,60 @@ func (p *MsgDispatcher)sendEnsureMsg(msg *PostMsg){
 		log.Println("Marshal msg error with msg data :"+msg.PostData.(string))
 		return
 	}
+
+	sendNum := 0
 	wsServer.ForEach("/",msg.Room, func(conn socketio.Conn) {
+		sendNum++
 		//将conn放入发送map中
 		emsi.sendIdMap[conn.ID()] = conn
 		conn.Emit("ensureMessage",string(jsonMsg))
 	})
+	//有客户端接收到该信息，则加入延时任务队列，否则不加入
+	if sendNum > 0{
+		//将重发任务加入延时任务队列
+		p.ringQueue.Add(10,msg.Id)
+	}
 	emsi.Unlock()
 }
+//给未确认收到消息的客户端发送消息
+func (p *MsgDispatcher)reSendEnsureMsg(msgId string){
+	p.msgSendLock.RLock()
+	ensureSendInfo,ok := p.EnsureMsgSendMap[msgId]
+	p.msgSendLock.RUnlock()
+	if ok{
+		//如果该消息id下客户端都已确认收到消息，则删除该msgId
+		if len(ensureSendInfo.sendIdMap) == 0 {
+			p.msgSendLock.Lock()
+			delete(p.EnsureMsgSendMap, msgId)
+			defer p.msgSendLock.Unlock()
+			return
+		}
+		sendNum := 0
+		for _,v := range ensureSendInfo.sendIdMap{
+			if msgManager.RoomHasConn(ensureSendInfo.msg.Room,v){
+				jsonMsg,err := json.Marshal(ensureSendInfo.msg)
+				if err != nil{
+					log.Println("Marshal msg error with msg data :"+ensureSendInfo.msg.PostData.(string))
+					continue
+				}
+				sendNum++
+				v.Emit("ensureMessage",string(jsonMsg))
+			}else{
+				ensureSendInfo.Lock()
+				delete(ensureSendInfo.sendIdMap,v.ID())
+				ensureSendInfo.Unlock()
+			}
+		}
+		//有用户接收到该消息才加入延时任务队列
+		if sendNum > 0{
+			//将msgId加入延时队列
+			p.ringQueue.Add(10,msgId)
+		}
+	}
+}
+
 //处理客户端消息确认回执
 func (p *MsgDispatcher) doConfirmMsg(msg *ConfirmMsg) {
-	log.Println(msg.Conn.ID() + " confirm msg "+msg.MsgId)
 	p.msgSendLock.Lock()
 	if mmap,ok := p.EnsureMsgSendMap[msg.MsgId];ok{
 		mmap.Lock()
@@ -150,53 +233,40 @@ func (p *MsgDispatcher) doConfirmMsg(msg *ConfirmMsg) {
 
 //消息发送后确保发送成功
 func (p *MsgDispatcher) ensureMsg(){
+	log.Println("ensureMsg start")
 	for {
-		msgManager := GetMsgManager()
-		p.msgSendLock.RLock()
-		for _,info := range p.EnsureMsgSendMap{
-			if len(info.sendIdMap) < 0{
-				continue
-			}
-			//超过30s,且客户端为离开房间则重新发送消息
-			if time.Now().Unix() > info.startTime.Add(time.Second*20).Unix(){
-				info.startTime = time.Now()
-				for _,v := range info.sendIdMap{
-					if msgManager.RoomHasConn(info.msg.Room,v){
-						jsonMsg,err := json.Marshal(info.msg)
-						if err != nil{
-							log.Println("Marshal msg error with msg data :"+info.msg.PostData.(string))
-							continue
-						}
-						v.Emit("ensureMessage",string(jsonMsg))
-					}else{
-						info.Lock()
-						delete(info.sendIdMap,v.ID())
-						info.Unlock()
-					}
+		select {
+			case msgIdStr := <- p.popEnsureMsgChan:
+				select {
+					case resend := <-p.reSendMsgChanPool:
+						resend <- msgIdStr
 				}
-			}
 		}
-		p.msgSendLock.RUnlock()
-		time.Sleep(time.Second*2)
 	}
 }
 
 //创建消息分发器，并初始化消息工作者
-func NewMsgDispatcher(msgWorkNum,confirmMsgWorkerNum int)* MsgDispatcher{
+func NewMsgDispatcher(msgWorkerNum,confirmMsgWorkerNum, reSendWorkerNum int)* MsgDispatcher{
 	dispather := MsgDispatcher{
 		msgChan:            make(chan *PostMsg,1024),
-		msgChanPool:        make(chan chan *PostMsg, msgWorkNum),
+		msgChanPool:        make(chan chan *PostMsg, msgWorkerNum),
 		msgWorkers:         []*MsgWorker{},
 
 		ConfirmMsgChan:     make(chan *ConfirmMsg,1024),
-		ConfirmMsgChanPool: make(chan chan *ConfirmMsg, msgWorkNum),
+		ConfirmMsgChanPool: make(chan chan *ConfirmMsg, msgWorkerNum),
 		confirmWorkers:		[]*ConfirmMsgWorker{},
+
+		reSendMsgChan:		make(chan []string,100),
+		reSendMsgChanPool:  make(chan chan []string),
+		reSendWorkers:		[]*ReSendMsgWorker{},
 
 		msgSendLock:        sync.RWMutex{},
 		EnsureMsgSendMap: make(map[string]*EnsureMsgSendInfo),
+		popEnsureMsgChan: make(chan []string,50),
 	}
+	dispather.ringQueue = NewRingQueue(60,dispather.popEnsureMsgChan)
 	//初始化发送消息工作者
-	for i:=0;i< msgWorkNum;i++{
+	for i:=0;i< msgWorkerNum;i++{
 		newWorker := MsgWorker{
 			id:i,
 			msgChan:make(chan *PostMsg,1),
@@ -214,6 +284,16 @@ func NewMsgDispatcher(msgWorkNum,confirmMsgWorkerNum int)* MsgDispatcher{
 			disPatcher:         &dispather,
 		}
 		dispather.confirmWorkers = append(dispather.confirmWorkers,&confirmWorker)
+	}
+
+	for i:=0;i< reSendWorkerNum;i++{
+		confirmWorker := ReSendMsgWorker{
+			id:                 i,
+			ReSendMsgChan:     make(chan []string,1),
+			ReSendChanPool: 	dispather.reSendMsgChanPool,
+			disPatcher:         &dispather,
+		}
+		dispather.reSendWorkers = append(dispather.reSendWorkers,&confirmWorker)
 	}
 
 	return &dispather

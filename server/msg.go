@@ -65,7 +65,7 @@ func GetMsgManager() *MsgManager{
 	once := sync.Once{}
 	once.Do(func() {
 		msgManager = &MsgManager{
-			msgDispatcher:    NewMsgDispatcher(10,5),
+			msgDispatcher:    NewMsgDispatcher(10,5,5),
 			JoinRoomChan:     make(chan *ConnRoomChangeInfo,256),
 			LeavaRoomChan:    make(chan *ConnRoomChangeInfo,256),
 			LeaveAllRoomChan: make(chan socketio.Conn,100),
