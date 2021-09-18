@@ -2,7 +2,7 @@ package server
 
 import (
 	"github.com/googollee/go-socket.io"
-	"log"
+	"github.com/sirupsen/logrus"
 	"strconv"
 	"sync/atomic"
 )
@@ -15,7 +15,7 @@ func NewWsServer()*socketio.Server{
 	}
 	newServer, err := socketio.NewServer(nil)
 	if err != nil {
-		log.Fatal(err)
+		logrus.Error(err)
 	}
 	wsServer = newServer
 	registerEnvet()
@@ -24,49 +24,49 @@ func NewWsServer()*socketio.Server{
 
 func registerEnvet(){
 	wsServer.OnConnect("/", func(conn socketio.Conn) error {
-		log.Println(conn.ID()+" "+conn.RemoteAddr().String()+" connect ")
+		logrus.Info(conn.ID()+" "+conn.RemoteAddr().String()+" connect ")
 		atomic.AddInt32(&GetMsgManager().totolConns,1)
-		log.Println("after join total conn num "+strconv.Itoa(int(GetMsgManager().totolConns)))
+		logrus.Info("after join total conn num "+strconv.Itoa(int(GetMsgManager().totolConns)))
 		return nil
 	})
 
 	wsServer.OnError("/", func(conn socketio.Conn, e error) {
 		//on error 时不能调用任何conn相关的方法，因为此时无法保证底层实现conn接口的对象是否已经被释放引发panic
-		log.Println("meet error "+e.Error())
+		logrus.Info("meet error "+e.Error())
 	})
 
 	//加入房间事件
 	wsServer.OnEvent("/", "joinRoom", func(conn socketio.Conn, room string) {
-		log.Println(conn.ID()+" "+conn.RemoteAddr().String()+" joinRoom "+room)
+		logrus.Info(conn.ID()+" "+conn.RemoteAddr().String()+" joinRoom "+room)
 		GetMsgManager().JoinRoom(room,conn)
 		conn.Join(room)
 	})
 
 	//离开房间
 	wsServer.OnEvent("/", "leaveRoom", func(conn socketio.Conn, room string) {
-		log.Println(conn.ID()+" "+conn.RemoteAddr().String()+" leaveRoom "+room)
+		logrus.Info(conn.ID()+" "+conn.RemoteAddr().String()+" leaveRoom "+room)
 		GetMsgManager().LeaveRoom(room,conn)
 		conn.Leave(room)
 	})
 
 	//离开所有房间事件
 	wsServer.OnEvent("/", "leaveAllRoom", func(conn socketio.Conn) {
-		log.Println(conn.ID()+" "+conn.RemoteAddr().String()+" leaveAllRoom")
+		logrus.Info(conn.ID()+" "+conn.RemoteAddr().String()+" leaveAllRoom")
 		GetMsgManager().LeaveAllRoom(conn)
 		conn.LeaveAll()
 	})
 
 	//确认消息事件
 	wsServer.OnEvent("/", "confirmMessage", func(conn socketio.Conn,msgId string){
-		log.Println(conn.ID()+" "+conn.RemoteAddr().String()+" confirmMessage "+msgId)
+		logrus.Info(conn.ID()+" "+conn.RemoteAddr().String()+" confirmMessage "+msgId)
 		GetMsgManager().ConfirmMsg(conn,msgId)
 	})
 
 	wsServer.OnDisconnect("/", func(conn socketio.Conn, s string) {
-		log.Println(conn.ID()+" "+conn.RemoteAddr().String()+" disconnect "+s)
+		logrus.Info(conn.ID()+" "+conn.RemoteAddr().String()+" disconnect "+s)
 		GetMsgManager().LeaveAllRoom(conn)
 		conn.LeaveAll()
 		atomic.AddInt32(&GetMsgManager().totolConns,-1)
-		log.Println("after leave total conn num "+strconv.Itoa(int(GetMsgManager().totolConns)))
+		logrus.Info("after leave total conn num "+strconv.Itoa(int(GetMsgManager().totolConns)))
 	})
 }

@@ -1,0 +1,7 @@
+[server]
+serverPort = 3390                #服务器占用端口
+logFilePath = "/tmp/logs"        #日志文件存储路径，日志将记录在该目录下，并自动轮转
+
+[auth]
+msgToken = "msgToken"              #服务端发送消息鉴权token
+

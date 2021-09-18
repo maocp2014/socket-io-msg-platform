@@ -1,26 +1,24 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"github.com/zhouhui8915/go-socket.io-client"
 	"log"
-	"os"
 	"strconv"
 	"sync/atomic"
 	"time"
 )
 
 type PostMsg struct {
-	Id string					`json:"msgId"`			//消息id，用于ws客户端和服务器确认收到该消息
+	Id string					`json:"msgId"`			//消息id，全局唯一，质量消息时，作为消息回执
 	Room string					`json:"room"`			//房间号
 	PostData interface{}		`json:"postData"`		//接口收到的数据，原样转发给ws客户端
-	IsEnsure bool				`json:"isEnsure"`		//是否需要保证成功送达
+	IsEnsure bool				`json:"isEnsure"`		//是否为质量消息（一定时间内客户端未发送消息回执则再次发送）
+	EnsureSeconds int			`json:'ensureSeconds'`	//质量消息重发时限，秒
 }
 
 func main() {
-
 	opts := &socketio_client.Options{
 		//Transport:"polling",
 		Transport:"websocket",
@@ -28,50 +26,51 @@ func main() {
 	}
 	opts.Query["user"] = "user"
 	opts.Query["pwd"] = "pass"
-	uri := "http://127.0.0.1:8099"
+	uri := "http://127.0.0.1:3390"
 
-	client, err := socketio_client.NewClient(uri, opts)
-	if err != nil {
-		log.Printf("NewClient error:%v\n", err)
-		return
-	}
-	//once := sync.Once{}
-	client.On("error", func() {
-		log.Printf("on error\n")
-	})
-	client.On("connection", func() {
-		log.Printf("on connect\n")
-	})
-	client.On("commonMessage", func(msg string) {
-		log.Printf("on commonMessage:%v\n", msg)
-	})
-	client.On("ensureMessage", func(msg string) {
-			log.Printf("on ensureMessage:%v\n", msg)
-			postMsg := PostMsg{}
-			json.Unmarshal([]byte(msg),&postMsg)
-			client.Emit("confirmMessage",postMsg.Id)
-	})
-	client.On("disconnection", func() {
-		log.Printf("on disconnect\n")
-		os.Exit(0)
-	})
-
-	reader := bufio.NewReader(os.Stdin)
-	for {
-		data, _, _ := reader.ReadLine()
-		command := string(data)
-		switch command {
-			case "join":
-				client.Emit("joinRoom","live")
-				log.Println("join room "+"live")
-			case "leave":
-				client.Emit("leaveRoom","live")
-				log.Println("leave room "+"live")
-			case "leaveAll":
-				client.Emit("leaveAllRoom")
-				log.Println("leaveAllRoom")
-		}
-	}
+	stressTest(uri,opts,10)
+	//client, err := socketio_client.NewClient(uri, opts)
+	//if err != nil {
+	//	log.Println("NewClient error:%v\n", err)
+	//	return
+	//}
+	////once := sync.Once{}
+	//client.On("error", func() {
+	//	log.Println("on error\n")
+	//})
+	//client.On("connection", func() {
+	//	log.Println("on connect\n")
+	//})
+	//client.On("commonMessage", func(msg string) {
+	//	log.Println("on commonMessage:%v\n", msg)
+	//})
+	//client.On("ensureMessage", func(msg string) {
+	//		log.Println("on ensureMessage:%v\n", msg)
+	//		postMsg := PostMsg{}
+	//		json.Unmarshal([]byte(msg),&postMsg)
+	//		client.Emit("confirmMessage",postMsg.Id)
+	//})
+	//client.On("disconnection", func() {
+	//	log.Println("on disconnect\n")
+	//	os.Exit(0)
+	//})
+	//
+	//reader := bufio.NewReader(os.Stdin)
+	//for {
+	//	data, _, _ := reader.ReadLine()
+	//	command := string(data)
+	//	switch command {
+	//		case "join":
+	//			client.Emit("joinRoom","live")
+	//			log.Println("join room "+"live")
+	//		case "leave":
+	//			client.Emit("leaveRoom","live")
+	//			log.Println("leave room "+"live")
+	//		case "leaveAll":
+	//			client.Emit("leaveAllRoom")
+	//			log.Println("leaveAllRoom")
+	//	}
+	//}
 }
 
 func stressTest(uri string,opts *socketio_client.Options,nums int){
@@ -103,21 +102,22 @@ func stressTest(uri string,opts *socketio_client.Options,nums int){
 func connnetServer(uri string,opts *socketio_client.Options,i int,stopChan chan int,receiveChan chan int){
 	client, err := socketio_client.NewClient(uri, opts)
 	if err != nil {
-		log.Printf("NewClient error:%v\n", err)
+		log.Println("NewClient error:%v\n", err)
 		return
 	}
+	client.Emit("joinRoom","live")
 	client.On("error", func() {
-		log.Printf("on error\n")
+		log.Println("on error\n")
 	})
 	client.On("connection", func() {
-		log.Printf("on connect\n")
+		log.Println("on connect\n")
 	})
 	client.On("commonMessage", func(msg string) {
 		//log.Printf("on commonMessage:%v\n", msg)
 		receiveChan <- i
 	})
 	client.On("ensureMessage", func(msg string) {
-		log.Printf("on ensureMessage:%v\n", msg)
+		log.Println("on ensureMessage:%v\n", msg)
 		postMsg := PostMsg{}
 		json.Unmarshal([]byte(msg), &postMsg)
 		client.Emit("confirmMessage", postMsg.Id)

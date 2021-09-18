@@ -3,7 +3,7 @@ package server
 import (
 	"fmt"
 	"github.com/googollee/go-socket.io"
-	"log"
+	"github.com/sirupsen/logrus"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -83,7 +83,7 @@ func (mr *MsgRoom) joinRoom(conn socketio.Conn){
 	}
 	mr.ConnsMap.Store(conn.ID(),conn)
 	atomic.AddInt32(&mr.num,1)
-	log.Println(fmt.Sprintf("after join room %s has client num %d",mr.Name,mr.num))
+	logrus.Info(fmt.Sprintf("after join room %s has client num %d",mr.Name,mr.num))
 }
 
 func (mr *MsgRoom) LeaveRoom(conn socketio.Conn){
@@ -96,7 +96,7 @@ func (mr *MsgRoom) LeaveRoom(conn socketio.Conn){
 		mr.ConnsMap.Delete(conn.ID())
 		atomic.AddInt32(&mr.num,-1)
 	}
-	log.Println(fmt.Sprintf("after leave room %s has client num %d",mr.Name,mr.num))
+	logrus.Info(fmt.Sprintf("after leave room %s has client num %d",mr.Name,mr.num))
 }
 
 func (mr *MsgRoom) HasConn(conn socketio.Conn) bool{
@@ -154,7 +154,7 @@ func (s *MsgManager) doLeaveRoom(leave *ConnRoomChangeInfo){
 }
 //客户端离开所有房间
 func (s *MsgManager) doLeaveAllRoom(conn socketio.Conn){
-	log.Println(conn.ID()+" leave all room ")
+	logrus.Info(conn.ID()+" leave all room ")
 	s.rooms.Range(func(k,v interface{}) bool{
 		v.(*MsgRoom).LeaveRoom(conn)
 		return true

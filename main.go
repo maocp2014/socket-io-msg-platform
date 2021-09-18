@@ -2,11 +2,14 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
-	"socket-io-msg-platform/server"
-	"log"
+	"fmt"
+	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
+	"github.com/sirupsen/logrus"
 	"net/http"
+	"os"
 	"runtime"
+	"socket-io-msg-platform/config"
+	"socket-io-msg-platform/server"
 	"time"
 )
 
@@ -17,20 +20,28 @@ type WebResult struct {
 	Data interface{}		`json:"data"`
 }
 
-var listenAddr string
-
 func init(){
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	flag.StringVar(&listenAddr, "listen", ":8099", "--listen")
-	flag.Parse()
 }
 
 func receivePost(w http.ResponseWriter,r *http.Request){
 	room := r.PostFormValue("room")
 	postData := r.PostFormValue("jsonData")
 	isEnsure := r.PostFormValue("isEnsure")
-	log.Println("receive post msg room------"+room)
-	log.Println("receive post msg ------"+postData)
+	token := r.PostFormValue("token")
+	if token != config.GetMsgToken(){
+		result := WebResult{
+			Code:400,
+			Msg:"token error",
+			ServerTime:time.Now().Unix(),
+			Data:nil,
+		}
+		jsonResult,_ := json.Marshal(&result)
+		w.Write(jsonResult)
+		return
+	}
+	logrus.Info("receive post msg room------"+room)
+	logrus.Info("receive post msg ------"+postData)
 	server.GetMsgManager().DispatchMsg(room,postData,isEnsure)
 	result := WebResult{
 		Code:200,
@@ -42,7 +53,24 @@ func receivePost(w http.ResponseWriter,r *http.Request){
 	w.Write(jsonResult)
 }
 
+//初始化日志记录
+func initLog(){
+	filePath := config.GetLogFile()+string(os.PathSeparator)+"msg_platform.%Y%m%d%H%M"
+	logf,err := rotatelogs.New(filePath)
+	if err != nil{
+		panic(err.Error())
+	}
+	logrus.SetOutput(logf)
+	//logrus.SetReportCaller(true)
+	logrus.SetFormatter(&logrus.JSONFormatter{})
+}
+
 func main() {
+	//初始化配置
+	config.InitConfig("./msgPlatform.toml")
+	//初始化日志记录配置
+	initLog()
+
 	wsServer := server.NewWsServer()
 	server.GetMsgManager().Run()
 	go wsServer.Serve()
@@ -61,6 +89,8 @@ func main() {
 		wsServer.ServeHTTP(w,r)
 	})
 	http.HandleFunc("/postMsg",receivePost)
-	log.Println("Serving at localhost"+listenAddr)
-	log.Fatal(http.ListenAndServe(listenAddr, nil))
+
+	listenAddr := fmt.Sprintf(":%d",config.GetServerPort())
+	logrus.Info("Serving at localhost"+listenAddr)
+	logrus.Info(http.ListenAndServe(listenAddr, nil))
 }

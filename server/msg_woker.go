@@ -3,7 +3,7 @@ package server
 import (
 	"encoding/json"
 	"github.com/googollee/go-socket.io"
-	"log"
+	"github.com/sirupsen/logrus"
 	"strconv"
 	"sync"
 	"time"
@@ -12,13 +12,13 @@ import (
 type MsgWorker struct {
 	id int
 	msgChan chan *PostMsg								//用于接收待发送的消息
-	msgChanPool chan chan *PostMsg
+	msgChanPool chan chan *PostMsg						//用于接收空闲的可接收消息的通道
 	disPatcher *MsgDispatcher
 }
 
 //即来即走，完成工作报备
 func (w *MsgWorker)work(){
-	log.Println("msg worker "+strconv.Itoa(w.id)+" start work")
+	logrus.Info("msg worker "+strconv.Itoa(w.id)+" start work")
 	for {
 		//每次空闲时，woker将自己接受消息的通道注册到工作池
 		w.msgChanPool <- w.msgChan
@@ -43,7 +43,7 @@ type ConfirmMsgWorker struct {
 
 //即来即走，完成工作报备
 func (w *ConfirmMsgWorker)work(){
-	log.Println("confirm msg worker "+strconv.Itoa(w.id)+" start work")
+	logrus.Info("confirm msg worker "+strconv.Itoa(w.id)+" start work")
 	for {
 		//每次空闲时，woker将自己接受消息的通道注册到工作池
 		w.ConfirmMsgChanPool <- w.confirmMsgChan
@@ -64,7 +64,7 @@ type ReSendMsgWorker struct {
 
 //即来即走，完成工作报备
 func (w *ReSendMsgWorker)work(){
-	log.Println("resend msg worker "+strconv.Itoa(w.id)+" start work")
+	logrus.Info("resend msg worker "+strconv.Itoa(w.id)+" start work")
 	for {
 		//每次空闲时，woker将自己接受消息的通道注册到工作池
 		w.ReSendChanPool <- w.ReSendMsgChan
@@ -126,7 +126,7 @@ func (p *MsgDispatcher)confirmMsg(msg *ConfirmMsg){
 }
 
 func (p *MsgDispatcher)loopMsg(){
-	log.Println("loopMsg start ")
+	logrus.Info("loopMsg start ")
 	for{
 		select {
 			//从消息通道里取消息分给准备好的woker
@@ -144,10 +144,10 @@ func (p *MsgDispatcher)loopMsg(){
 func (p *MsgDispatcher)sendCommonMsg(msg *PostMsg){
 	jsonMsg,err := json.Marshal(msg)
 	if err != nil{
-		log.Println("Marshal msg error with msg data :"+msg.PostData.(string))
+		logrus.Error("Marshal msg error with msg data :"+msg.PostData.(string))
 		return
 	}
-	log.Println("send common message")
+	logrus.Info("send common message")
 	wsServer.BroadcastToRoom("/",msg.Room,"commonMessage",string(jsonMsg))
 }
 
@@ -161,11 +161,12 @@ func (p *MsgDispatcher)sendEnsureMsg(msg *PostMsg){
 	p.msgSendLock.Lock()
 	p.EnsureMsgSendMap[msg.Id] = &emsi
 	p.msgSendLock.Unlock()
-	log.Println("send ensure message")
+	logrus.Info("send ensure message")
 	emsi.Lock()
+	defer emsi.Unlock()
 	jsonMsg,err := json.Marshal(msg)
 	if err != nil{
-		log.Println("Marshal msg error with msg data :"+msg.PostData.(string))
+		logrus.Error("Marshal msg error with msg data :"+msg.PostData.(string))
 		return
 	}
 
@@ -181,7 +182,6 @@ func (p *MsgDispatcher)sendEnsureMsg(msg *PostMsg){
 		//将重发任务加入延时任务队列
 		p.ringQueue.Add(10,msg.Id)
 	}
-	emsi.Unlock()
 }
 //给未确认收到消息的客户端发送消息
 func (p *MsgDispatcher)reSendEnsureMsg(msgId string){
@@ -201,7 +201,7 @@ func (p *MsgDispatcher)reSendEnsureMsg(msgId string){
 			if msgManager.RoomHasConn(ensureSendInfo.msg.Room,v){
 				jsonMsg,err := json.Marshal(ensureSendInfo.msg)
 				if err != nil{
-					log.Println("Marshal msg error with msg data :"+ensureSendInfo.msg.PostData.(string))
+					logrus.Error("Marshal msg error with msg data :"+ensureSendInfo.msg.PostData.(string))
 					continue
 				}
 				sendNum++
@@ -233,7 +233,7 @@ func (p *MsgDispatcher) doConfirmMsg(msg *ConfirmMsg) {
 
 //消息发送后确保发送成功
 func (p *MsgDispatcher) ensureMsg(){
-	log.Println("ensureMsg start")
+	logrus.Info("ensureMsg start")
 	for {
 		select {
 			case msgIdStr := <- p.popEnsureMsgChan:
